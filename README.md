@@ -1,10 +1,17 @@
-# Twitter Account Location Flag Chrome Extension
+# X/Twitter Country Block and Flag Chrome Extension
 
-A Chrome extension that displays country flag emojis next to Twitter/X usernames based on the account's location information.
+## Credits to <https://github.com/RhysSullivan/twitter-account-location-in-username>
+
+This has been cloned and built on top of <https://github.com/RhysSullivan/twitter-account-location-in-username>
+
+X/Twitter Country Block and Flag Chrome Extension
+
+A Chrome extension that hides the selected countries and displays country flag emojis next to Twitter/X usernames based on the account's location information.
 
 ## Features
 
 - Automatically detects usernames on Twitter/X pages
+- Automatically hides tweets from the accounts of selected countries.
 - Queries Twitter's GraphQL API to get account location information
 - Displays the corresponding country flag emoji next to usernames
 - Works with dynamically loaded content (infinite scroll)
@@ -19,6 +26,12 @@ A Chrome extension that displays country flag emojis next to Twitter/X usernames
 5. Select the directory containing this extension
 6. The extension will now be active on Twitter/X pages
 
+## How To Use
+
+1. Click the extension icon.
+2. Select the countries you want to filter out.
+3. Refresh or open the X/Twitter and that's it!
+
 ## How It Works
 
 1. The extension runs a content script on all Twitter/X pages
@@ -27,46 +40,10 @@ A Chrome extension that displays country flag emojis next to Twitter/X usernames
 4. The location is mapped to a flag emoji using the country flags mapping
 5. The flag emoji is displayed next to the username
 
-## Files
-
-- `manifest.json` - Chrome extension configuration
-- `content.js` - Main content script that processes the page and injects page scripts for API calls
-- `countryFlags.js` - Country name to flag emoji mapping
-- `README.md` - This file
-
-## Technical Details
-
-The extension uses a page script injection approach to make API requests. This allows it to:
-- Access the same cookies and authentication as the logged-in user
-- Make same-origin requests to Twitter's API without CORS issues
-- Work seamlessly with Twitter's authentication system
-
-The content script injects a script into the page context that listens for location fetch requests. When a username is detected, the content script sends a custom event to the page script, which makes the API request and returns the location data.
-
-## API Endpoint
-
-The extension uses Twitter's GraphQL API endpoint:
-```
-https://x.com/i/api/graphql/XRqGa7EeokUU5kppkh13EA/AboutAccountQuery
-```
-
-With variables:
-```json
-{
-  "screenName": "username"
-}
-```
-
-The response contains `account_based_in` field in:
-```
-data.user_result_by_screen_name.result.about_profile.account_based_in
-```
-
 ## Limitations
 
 - Requires the user to be logged into Twitter/X
 - Only works for accounts that have location information available
-- Country names must match the mapping in `countryFlags.js` (case-insensitive)
 - Rate limiting may apply if making too many requests
 
 ## Privacy
@@ -79,6 +56,7 @@ data.user_result_by_screen_name.result.about_profile.account_based_in
 ## Troubleshooting
 
 If flags are not appearing:
+
 1. Make sure you're logged into Twitter/X
 2. Check the browser console for any error messages
 3. Verify that the account has location information available
@@ -87,4 +65,3 @@ If flags are not appearing:
 ## License
 
 MIT
-

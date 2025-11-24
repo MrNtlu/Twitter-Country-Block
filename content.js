@@ -20,18 +20,29 @@ let extensionEnabled = true;
 const TOGGLE_KEY = 'extension_enabled';
 const DEFAULT_ENABLED = true;
 
+// Hidden countries state
+let hiddenCountries = []; // No countries hidden by default
+const HIDDEN_COUNTRIES_KEY = 'hidden_countries';
+
 // Track usernames currently being processed to avoid duplicate requests
 const processingUsernames = new Set();
 
-// Load enabled state
+// Track hidden tweets for badge functionality
+let hiddenTweets = [];
+let badge = null;
+
+// Load enabled state and hidden countries
 async function loadEnabledState() {
   try {
-    const result = await chrome.storage.local.get([TOGGLE_KEY]);
+    const result = await chrome.storage.local.get([TOGGLE_KEY, HIDDEN_COUNTRIES_KEY]);
     extensionEnabled = result[TOGGLE_KEY] !== undefined ? result[TOGGLE_KEY] : DEFAULT_ENABLED;
+    hiddenCountries = result[HIDDEN_COUNTRIES_KEY] || [];
     console.log('Extension enabled:', extensionEnabled);
+    console.log('Hidden countries:', hiddenCountries);
   } catch (error) {
     console.error('Error loading enabled state:', error);
     extensionEnabled = DEFAULT_ENABLED;
+    hiddenCountries = [];
   }
 }
 
@@ -40,7 +51,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'extensionToggle') {
     extensionEnabled = request.enabled;
     console.log('Extension toggled:', extensionEnabled);
-    
+
     if (extensionEnabled) {
       // Re-initialize if enabled
       setTimeout(() => {
@@ -49,6 +60,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else {
       // Remove all flags if disabled
       removeAllFlags();
+    }
+  } else if (request.type === 'hiddenCountriesChanged') {
+    hiddenCountries = request.countries;
+    console.log('Hidden countries updated:', hiddenCountries);
+
+    if (extensionEnabled) {
+      // Re-process usernames to apply new country settings
+      setTimeout(() => {
+        processUsernames();
+      }, 500);
     }
   }
 });
@@ -61,12 +82,12 @@ async function loadCache() {
       console.log('Extension context invalidated, skipping cache load');
       return;
     }
-    
+
     const result = await chrome.storage.local.get(CACHE_KEY);
     if (result[CACHE_KEY]) {
       const cached = result[CACHE_KEY];
       const now = Date.now();
-      
+
       // Filter out expired entries and null entries (allow retry)
       for (const [username, data] of Object.entries(cached)) {
         if (data.expiry && data.expiry > now && data.location !== null) {
@@ -77,8 +98,8 @@ async function loadCache() {
     }
   } catch (error) {
     // Extension context invalidated errors are expected when extension is reloaded
-    if (error.message?.includes('Extension context invalidated') || 
-        error.message?.includes('message port closed')) {
+    if (error.message?.includes('Extension context invalidated') ||
+      error.message?.includes('message port closed')) {
       console.log('Extension context invalidated, cache load skipped');
     } else {
       console.error('Error loading cache:', error);
@@ -94,11 +115,11 @@ async function saveCache() {
       console.log('Extension context invalidated, skipping cache save');
       return;
     }
-    
+
     const cacheObj = {};
     const now = Date.now();
     const expiry = now + (CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
-    
+
     for (const [username, location] of locationCache.entries()) {
       cacheObj[username] = {
         location: location,
@@ -106,12 +127,12 @@ async function saveCache() {
         cachedAt: now
       };
     }
-    
+
     await chrome.storage.local.set({ [CACHE_KEY]: cacheObj });
   } catch (error) {
     // Extension context invalidated errors are expected when extension is reloaded
-    if (error.message?.includes('Extension context invalidated') || 
-        error.message?.includes('message port closed')) {
+    if (error.message?.includes('Extension context invalidated') ||
+      error.message?.includes('message port closed')) {
       console.log('Extension context invalidated, cache save skipped');
     } else {
       console.error('Error saving cache:', error);
@@ -126,7 +147,7 @@ async function saveCacheEntry(username, location) {
     console.log('Extension context invalidated, skipping cache entry save');
     return;
   }
-  
+
   locationCache.set(username, location);
   // Debounce saves - only save every 5 seconds
   if (!saveCache.timeout) {
@@ -141,11 +162,11 @@ async function saveCacheEntry(username, location) {
 function injectPageScript() {
   const script = document.createElement('script');
   script.src = chrome.runtime.getURL('pageScript.js');
-  script.onload = function() {
+  script.onload = function () {
     this.remove();
   };
   (document.head || document.documentElement).appendChild(script);
-  
+
   // Listen for rate limit info from page script
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
@@ -162,7 +183,7 @@ async function processRequestQueue() {
   if (isProcessingQueue || requestQueue.length === 0) {
     return;
   }
-  
+
   // Check if we're rate limited
   if (rateLimitResetTime > 0) {
     const now = Math.floor(Date.now() / 1000);
@@ -176,22 +197,22 @@ async function processRequestQueue() {
       rateLimitResetTime = 0;
     }
   }
-  
+
   isProcessingQueue = true;
-  
+
   while (requestQueue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
     const now = Date.now();
     const timeSinceLastRequest = now - lastRequestTime;
-    
+
     // Wait if needed to respect rate limit
     if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
       await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL - timeSinceLastRequest));
     }
-    
+
     const { screenName, resolve, reject } = requestQueue.shift();
     activeRequests++;
     lastRequestTime = Date.now();
-    
+
     // Make the request
     makeLocationRequest(screenName)
       .then(location => {
@@ -206,7 +227,7 @@ async function processRequestQueue() {
         setTimeout(processRequestQueue, 200);
       });
   }
-  
+
   isProcessingQueue = false;
 }
 
@@ -214,39 +235,39 @@ async function processRequestQueue() {
 function makeLocationRequest(screenName) {
   return new Promise((resolve, reject) => {
     const requestId = Date.now() + Math.random();
-    
+
     // Listen for response via postMessage
     const handler = (event) => {
       // Only accept messages from the page (not from extension)
       if (event.source !== window) return;
-      
-      if (event.data && 
-          event.data.type === '__locationResponse' &&
-          event.data.screenName === screenName && 
-          event.data.requestId === requestId) {
+
+      if (event.data &&
+        event.data.type === '__locationResponse' &&
+        event.data.screenName === screenName &&
+        event.data.requestId === requestId) {
         window.removeEventListener('message', handler);
         const location = event.data.location;
         const isRateLimited = event.data.isRateLimited || false;
-        
+
         // Only cache if not rate limited (don't cache failures due to rate limiting)
         if (!isRateLimited) {
           saveCacheEntry(screenName, location || null);
         } else {
           console.log(`Not caching null for ${screenName} due to rate limit`);
         }
-        
+
         resolve(location || null);
       }
     };
     window.addEventListener('message', handler);
-    
+
     // Send fetch request to page script via postMessage
     window.postMessage({
       type: '__fetchLocation',
       screenName,
       requestId
     }, '*');
-    
+
     // Timeout after 10 seconds
     setTimeout(() => {
       window.removeEventListener('message', handler);
@@ -272,7 +293,7 @@ async function getUserLocation(screenName) {
       locationCache.delete(screenName);
     }
   }
-  
+
   console.log(`Queueing API request for ${screenName}`);
   // Queue the request
   return new Promise((resolve, reject) => {
@@ -294,60 +315,60 @@ function extractUsername(element) {
         const username = match[1];
         // Filter out common routes
         const excludedRoutes = ['home', 'explore', 'notifications', 'messages', 'i', 'compose', 'search', 'settings', 'bookmarks', 'lists', 'communities'];
-        if (!excludedRoutes.includes(username) && 
-            !username.startsWith('hashtag') &&
-            !username.startsWith('search') &&
-            username.length > 0 &&
-            username.length < 20) { // Usernames are typically short
+        if (!excludedRoutes.includes(username) &&
+          !username.startsWith('hashtag') &&
+          !username.startsWith('search') &&
+          username.length > 0 &&
+          username.length < 20) { // Usernames are typically short
           return username;
         }
       }
     }
   }
-  
+
   // Try finding username links in the entire element (broader search)
   const allLinks = element.querySelectorAll('a[href^="/"]');
   const seenUsernames = new Set();
-  
+
   for (const link of allLinks) {
     const href = link.getAttribute('href');
     if (!href) continue;
-    
+
     const match = href.match(/^\/([^\/\?]+)/);
     if (!match || !match[1]) continue;
-    
+
     const potentialUsername = match[1];
-    
+
     // Skip if we've already checked this username
     if (seenUsernames.has(potentialUsername)) continue;
     seenUsernames.add(potentialUsername);
-    
+
     // Filter out routes and invalid usernames
     const excludedRoutes = ['home', 'explore', 'notifications', 'messages', 'i', 'compose', 'search', 'settings', 'bookmarks', 'lists', 'communities', 'hashtag'];
     if (excludedRoutes.some(route => potentialUsername === route || potentialUsername.startsWith(route))) {
       continue;
     }
-    
+
     // Skip status/tweet links
     if (potentialUsername.includes('status') || potentialUsername.match(/^\d+$/)) {
       continue;
     }
-    
+
     // Check link text/content for username indicators
     const text = link.textContent?.trim() || '';
     const linkText = text.toLowerCase();
     const usernameLower = potentialUsername.toLowerCase();
-    
+
     // If link text starts with @, it's definitely a username
     if (text.startsWith('@')) {
       return potentialUsername;
     }
-    
+
     // If link text matches the username (without @), it's likely a username
     if (linkText === usernameLower || linkText === `@${usernameLower}`) {
       return potentialUsername;
     }
-    
+
     // Check if link is in a UserName container or has username-like structure
     const parent = link.closest('[data-testid="UserName"], [data-testid="User-Name"]');
     if (parent) {
@@ -356,7 +377,7 @@ function extractUsername(element) {
         return potentialUsername;
       }
     }
-    
+
     // Also check if link text is @username format
     if (text && text.trim().startsWith('@')) {
       const atUsername = text.trim().substring(1);
@@ -365,7 +386,7 @@ function extractUsername(element) {
       }
     }
   }
-  
+
   // Last resort: look for @username pattern in text content and verify with link
   const textContent = element.textContent || '';
   const atMentionMatches = textContent.matchAll(/@([a-zA-Z0-9_]+)/g);
@@ -381,7 +402,7 @@ function extractUsername(element) {
       }
     }
   }
-  
+
   return null;
 }
 
@@ -411,7 +432,7 @@ function createLoadingShimmer() {
   shimmer.style.background = 'linear-gradient(90deg, rgba(113, 118, 123, 0.2) 25%, rgba(113, 118, 123, 0.4) 50%, rgba(113, 118, 123, 0.2) 75%)';
   shimmer.style.backgroundSize = '200% 100%';
   shimmer.style.animation = 'shimmer 1.5s infinite';
-  
+
   // Add animation keyframes if not already added
   if (!document.getElementById('twitter-flag-shimmer-style')) {
     const style = document.createElement('style');
@@ -428,8 +449,342 @@ function createLoadingShimmer() {
     `;
     document.head.appendChild(style);
   }
-  
+
   return shimmer;
+}
+
+// Track a hidden tweet
+function trackHiddenTweet(country, flag, username, tweetElement) {
+  hiddenTweets.push({
+    country,
+    flag,
+    username,
+    tweetElement,
+    timestamp: Date.now()
+  });
+
+  updateBadge();
+  console.log(`Tracked hidden tweet from ${username} (${country}). Total: ${hiddenTweets.length}`);
+}
+
+// Update or create the notification badge on X logo
+function updateBadge() {
+  const count = hiddenTweets.length;
+
+  if (count === 0) {
+    removeBadge();
+    return;
+  }
+
+  if (!badge) {
+    createBadge();
+  }
+
+  if (badge) {
+    const badgeCount = badge.querySelector('.badge-count');
+    if (badgeCount) {
+      badgeCount.textContent = count > 99 ? '99+' : count.toString();
+    }
+
+    // Add a subtle bounce animation when count updates
+    badge.style.animation = 'none';
+    setTimeout(() => {
+      badge.style.animation = 'badgeBounce 0.3s ease-out';
+    }, 10);
+  }
+}
+
+// Create the badge over X logo
+function createBadge() {
+  try {
+    // Find the X logo using the selector pattern from the provided HTML
+    const xLogo = document.querySelector('h1[role="heading"] a[aria-label="X"], h1[role="heading"] a[href="/home"]');
+
+    if (!xLogo) {
+      console.log('X logo not found for badge');
+      return;
+    }
+
+    // Create badge element
+    badge = document.createElement('div');
+    badge.className = 'twitter-extension-badge';
+    badge.setAttribute('data-twitter-extension-badge', 'true');
+
+    // Badge styling
+    badge.style.position = 'absolute';
+    badge.style.top = '-2px';
+    badge.style.right = '-2px';
+    badge.style.width = '18px';
+    badge.style.height = '18px';
+    badge.style.backgroundColor = '#ff4444';
+    badge.style.borderRadius = '50%';
+    badge.style.display = 'flex';
+    badge.style.alignItems = 'center';
+    badge.style.justifyContent = 'center';
+    badge.style.fontSize = '11px';
+    badge.style.fontWeight = 'bold';
+    badge.style.color = 'white';
+    badge.style.cursor = 'pointer';
+    badge.style.zIndex = '9999';
+    badge.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+    badge.style.border = '2px solid white';
+    badge.style.transition = 'transform 0.2s ease';
+
+    // Count display
+    const countSpan = document.createElement('span');
+    countSpan.className = 'badge-count';
+    countSpan.textContent = hiddenTweets.length > 99 ? '99+' : hiddenTweets.length.toString();
+    badge.appendChild(countSpan);
+
+    // Hover effects
+    badge.addEventListener('mouseenter', () => {
+      badge.style.transform = 'scale(1.1)';
+      badge.style.backgroundColor = '#ff6666';
+    });
+
+    badge.addEventListener('mouseleave', () => {
+      badge.style.transform = 'scale(1)';
+      badge.style.backgroundColor = '#ff4444';
+    });
+
+    // Click handler to show modal
+    badge.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showBadgeModal();
+    });
+
+    // Ensure parent is positioned relatively
+    const xLogoParent = xLogo.parentElement;
+    if (xLogoParent) {
+      const computedStyle = getComputedStyle(xLogoParent);
+      if (computedStyle.position === 'static') {
+        xLogoParent.style.position = 'relative';
+      }
+    }
+
+    // Add badge to X logo parent
+    xLogo.parentElement.appendChild(badge);
+
+    // Add CSS animation keyframes
+    addBadgeAnimations();
+
+    console.log('✓ Created notification badge on X logo');
+  } catch (error) {
+    console.error('Error creating badge:', error);
+  }
+}
+
+// Add CSS animations for badge
+function addBadgeAnimations() {
+  if (!document.getElementById('twitter-extension-badge-style')) {
+    const style = document.createElement('style');
+    style.id = 'twitter-extension-badge-style';
+    style.textContent = `
+      @keyframes badgeBounce {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.2); }
+      }
+
+      .twitter-extension-modal {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        border: 1px solid #e1e8ed;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+        z-index: 10000;
+        min-width: 300px;
+        max-width: 400px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        animation: modalFadeIn 0.2s ease-out;
+      }
+
+      @keyframes modalFadeIn {
+        from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+        to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      }
+
+      .twitter-extension-modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.3);
+        z-index: 9999;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
+
+// Show modal with hidden tweets summary
+function showBadgeModal() {
+  // Remove existing modal if any
+  const existingModal = document.querySelector('.twitter-extension-modal');
+  const existingOverlay = document.querySelector('.twitter-extension-modal-overlay');
+  if (existingModal) existingModal.remove();
+  if (existingOverlay) existingOverlay.remove();
+
+  // Create overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'twitter-extension-modal-overlay';
+
+  // Create modal
+  const modal = document.createElement('div');
+  modal.className = 'twitter-extension-modal';
+
+  // Group tweets by country
+  const countryGroups = {};
+  hiddenTweets.forEach(tweet => {
+    if (!countryGroups[tweet.country]) {
+      countryGroups[tweet.country] = {
+        flag: tweet.flag,
+        count: 0
+      };
+    }
+    countryGroups[tweet.country].count++;
+  });
+
+  // Create modal content
+  modal.innerHTML = `
+    <div style="padding: 20px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <h3 style="margin: 0; font-size: 18px; font-weight: 600; color: #0f1419;">
+          Hidden Tweets (${hiddenTweets.length})
+        </h3>
+        <button id="closeModal" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #536471; padding: 4px;">×</button>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        ${Object.entries(countryGroups).map(([country, data]) => `
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eff3f4;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 16px; font-family: 'Twemoji Country Flags', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;">${data.flag}</span>
+              <span style="font-weight: 500; color: #0f1419;">${country}</span>
+            </div>
+            <span style="color: #536471; font-size: 14px;">${data.count} tweet${data.count === 1 ? '' : 's'}</span>
+          </div>
+        `).join('')}
+      </div>
+
+      <div style="display: flex; gap: 8px; justify-content: flex-end;">
+        <button id="clearAll" style="
+          background: #ff4444;
+          color: white;
+          border: none;
+          padding: 8px 16px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 14px;
+          transition: background 0.2s;
+        ">See Temporarily</button>
+        <button id="closeModalBtn" style="
+          background: #eff3f4;
+          color: #0f1419;
+          border: none;
+          padding: 8px 16px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 14px;
+          transition: background 0.2s;
+        ">Close</button>
+      </div>
+    </div>
+  `;
+
+  // Add event handlers
+  const closeModal = () => {
+    modal.remove();
+    overlay.remove();
+  };
+
+  const clearAll = () => {
+    // Restore all hidden tweets
+    hiddenTweets.forEach(tweet => {
+      if (tweet.tweetElement && tweet.tweetElement.parentNode) {
+        tweet.tweetElement.style.display = '';
+      }
+    });
+
+    hiddenTweets = [];
+    updateBadge();
+    closeModal();
+  };
+
+  // Event listeners
+  overlay.addEventListener('click', closeModal);
+  modal.querySelector('#closeModal').addEventListener('click', closeModal);
+  modal.querySelector('#closeModalBtn').addEventListener('click', closeModal);
+  modal.querySelector('#clearAll').addEventListener('click', clearAll);
+
+  // Add hover effects
+  const clearAllBtn = modal.querySelector('#clearAll');
+  const closeBtn = modal.querySelector('#closeModalBtn');
+
+  clearAllBtn.addEventListener('mouseenter', () => {
+    clearAllBtn.style.backgroundColor = '#ff6666';
+  });
+  clearAllBtn.addEventListener('mouseleave', () => {
+    clearAllBtn.style.backgroundColor = '#ff4444';
+  });
+
+  closeBtn.addEventListener('mouseenter', () => {
+    closeBtn.style.backgroundColor = '#e1e8ed';
+  });
+  closeBtn.addEventListener('mouseleave', () => {
+    closeBtn.style.backgroundColor = '#eff3f4';
+  });
+
+  // Add to page
+  document.body.appendChild(overlay);
+  document.body.appendChild(modal);
+}
+
+// Remove the badge
+function removeBadge() {
+  if (badge && badge.parentNode) {
+    badge.remove();
+    badge = null;
+  }
+
+  // Also remove any open modals
+  const modal = document.querySelector('.twitter-extension-modal');
+  const overlay = document.querySelector('.twitter-extension-modal-overlay');
+  if (modal) modal.remove();
+  if (overlay) overlay.remove();
+}
+
+// Function to completely hide tweets from selected countries
+function hideTweetCompletely(usernameElement, location, flag, screenName) {
+  try {
+    // Find the article container (tweet)
+    const tweetContainer = usernameElement.closest('article[data-testid="tweet"]');
+    if (!tweetContainer) {
+      console.log('Could not find tweet container for complete hiding');
+      return;
+    }
+
+    // Check if already hidden
+    if (tweetContainer.style.display === 'none' || tweetContainer.hasAttribute('data-completely-hidden')) {
+      return;
+    }
+
+    // Mark as hidden and hide completely
+    tweetContainer.setAttribute('data-completely-hidden', 'true');
+    tweetContainer.setAttribute('data-hidden-country', location);
+    tweetContainer.style.display = 'none';
+
+    // Track the hidden tweet
+    trackHiddenTweet(location, flag, screenName, tweetContainer);
+
+    console.log(`✓ Completely hidden tweet from ${screenName} (${location})`);
+  } catch (error) {
+    console.error('Error completely hiding tweet:', error);
+  }
 }
 
 // Function to add flag to username element
@@ -454,14 +809,14 @@ async function addFlagToUsername(usernameElement, screenName) {
   // Mark as processing to avoid duplicate requests
   usernameElement.dataset.flagAdded = 'processing';
   processingUsernames.add(screenName);
-  
+
   // Find User-Name container for shimmer placement
   const userNameContainer = usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
-  
+
   // Create and insert loading shimmer
   const shimmerSpan = createLoadingShimmer();
   let shimmerInserted = false;
-  
+
   if (userNameContainer) {
     // Try to insert shimmer before handle section (same place flag will go)
     const handleSection = findHandleSection(userNameContainer, screenName);
@@ -488,248 +843,254 @@ async function addFlagToUsername(usernameElement, screenName) {
       }
     }
   }
-  
+
   try {
     console.log(`Processing flag for ${screenName}...`);
 
     // Get location
     const location = await getUserLocation(screenName);
     console.log(`Location for ${screenName}:`, location);
-    
+
     // Remove shimmer
     if (shimmerInserted && shimmerSpan.parentNode) {
       shimmerSpan.remove();
     }
-    
+
     if (!location) {
       console.log(`No location found for ${screenName}, marking as failed`);
       usernameElement.dataset.flagAdded = 'failed';
       return;
     }
 
-  // Get flag emoji
-  const flag = getCountryFlag(location);
-  if (!flag) {
-    console.log(`No flag found for location: ${location}`);
-    // Shimmer already removed above, but ensure it's gone
-    if (shimmerInserted && shimmerSpan.parentNode) {
-      shimmerSpan.remove();
-    }
-    usernameElement.dataset.flagAdded = 'failed';
-    return;
-  }
-  
-  console.log(`Found flag ${flag} for ${screenName} (${location})`);
-
-  // Find the username link - try multiple strategies
-  // Priority: Find the @username link, not the display name link
-  let usernameLink = null;
-  
-  // Find the User-Name container (reuse from above if available, otherwise find it)
-  const containerForLink = userNameContainer || usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
-  
-  // Strategy 1: Find link with @username text content (most reliable - this is the actual handle)
-  if (containerForLink) {
-    const containerLinks = containerForLink.querySelectorAll('a[href^="/"]');
-    for (const link of containerLinks) {
-      const text = link.textContent?.trim();
-      const href = link.getAttribute('href');
-      const match = href.match(/^\/([^\/\?]+)/);
-      
-      // Prioritize links that have @username as text
-      if (match && match[1] === screenName) {
-        if (text === `@${screenName}` || text === screenName) {
-          usernameLink = link;
-          break;
-        }
+    // Get flag emoji
+    const flag = getCountryFlag(location);
+    if (!flag) {
+      console.log(`No flag found for location: ${location}`);
+      // Shimmer already removed above, but ensure it's gone
+      if (shimmerInserted && shimmerSpan.parentNode) {
+        shimmerSpan.remove();
       }
+      usernameElement.dataset.flagAdded = 'failed';
+      return;
     }
-  }
-  
-  // Strategy 2: Find any link with @username text in UserName container
-  if (!usernameLink && containerForLink) {
-    const containerLinks = containerForLink.querySelectorAll('a[href^="/"]');
-    for (const link of containerLinks) {
-      const text = link.textContent?.trim();
-      if (text === `@${screenName}`) {
-        usernameLink = link;
-        break;
-      }
-    }
-  }
-  
-  // Strategy 3: Find link with exact matching href that has @username text anywhere in element
-  if (!usernameLink) {
-    const links = usernameElement.querySelectorAll('a[href^="/"]');
-    for (const link of links) {
-      const href = link.getAttribute('href');
-      const text = link.textContent?.trim();
-      if ((href === `/${screenName}` || href.startsWith(`/${screenName}?`)) && 
-          (text === `@${screenName}` || text === screenName)) {
-        usernameLink = link;
-        break;
-      }
-    }
-  }
-  
-  // Strategy 4: Fallback to any matching href (but prefer ones not in display name area)
-  if (!usernameLink) {
-    const links = usernameElement.querySelectorAll('a[href^="/"]');
-    for (const link of links) {
-      const href = link.getAttribute('href');
-      const match = href.match(/^\/([^\/\?]+)/);
-      if (match && match[1] === screenName) {
-        // Skip if this looks like a display name link (has verification badge nearby)
-        const hasVerificationBadge = link.closest('[data-testid="User-Name"]')?.querySelector('[data-testid="icon-verified"]');
-        if (!hasVerificationBadge || link.textContent?.trim() === `@${screenName}`) {
-          usernameLink = link;
-          break;
-        }
-      }
-    }
-  }
 
-  if (!usernameLink) {
-    console.error(`Could not find username link for ${screenName}`);
-    console.error('Available links in container:', Array.from(usernameElement.querySelectorAll('a[href^="/"]')).map(l => ({
-      href: l.getAttribute('href'),
-      text: l.textContent?.trim()
-    })));
-    // Remove shimmer on error
-    if (shimmerInserted && shimmerSpan.parentNode) {
-      shimmerSpan.remove();
-    }
-    usernameElement.dataset.flagAdded = 'failed';
-    return;
-  }
-  
-  console.log(`Found username link for ${screenName}:`, usernameLink.href, usernameLink.textContent?.trim());
+    console.log(`Found flag ${flag} for ${screenName} (${location})`);
 
-  // Check if flag already exists (check in the entire container, not just parent)
-  const existingFlag = usernameElement.querySelector('[data-twitter-flag]');
-  if (existingFlag) {
-    // Remove shimmer if flag already exists
-    if (shimmerInserted && shimmerSpan.parentNode) {
-      shimmerSpan.remove();
+    // Completely hide tweets for selected countries
+    if (location && hiddenCountries.some(country => country.toLowerCase() === location.toLowerCase())) {
+      hideTweetCompletely(usernameElement, location, flag, screenName);
     }
-    usernameElement.dataset.flagAdded = 'true';
-    return;
-  }
 
-  // Add flag emoji - place it next to verification badge, before @ handle
-  const flagSpan = document.createElement('span');
-  flagSpan.textContent = ` ${flag}`;
-  flagSpan.setAttribute('data-twitter-flag', 'true');
-  flagSpan.style.marginLeft = '4px';
-  flagSpan.style.marginRight = '4px';
-  flagSpan.style.display = 'inline';
-  flagSpan.style.color = 'inherit';
-  flagSpan.style.verticalAlign = 'middle';
-  
-  // Use userNameContainer found above, or find it if not found
-  const containerForFlag = userNameContainer || usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
-  
-  if (!containerForFlag) {
-    console.error(`Could not find UserName container for ${screenName}`);
-    // Remove shimmer on error
-    if (shimmerInserted && shimmerSpan.parentNode) {
-      shimmerSpan.remove();
-    }
-    usernameElement.dataset.flagAdded = 'failed';
-    return;
-  }
-  
-  // Find the verification badge (SVG with data-testid="icon-verified")
-  const verificationBadge = containerForFlag.querySelector('[data-testid="icon-verified"]');
-  
-  // Find the handle section - the div that contains the @username link
-  // The structure is: User-Name > div (display name) > div (handle section with @username)
-  const handleSection = findHandleSection(containerForFlag, screenName);
+    // Find the username link - try multiple strategies
+    // Priority: Find the @username link, not the display name link
+    let usernameLink = null;
 
-  let inserted = false;
-  
-  // Strategy 1: Insert right before the handle section div (which contains @username)
-  // The handle section is a direct child of User-Name container
-  if (handleSection && handleSection.parentNode === containerForFlag) {
-    try {
-      containerForFlag.insertBefore(flagSpan, handleSection);
-      inserted = true;
-      console.log(`✓ Inserted flag before handle section for ${screenName}`);
-    } catch (e) {
-      console.log('Failed to insert before handle section:', e);
-    }
-  }
-  
-  // Strategy 2: Find the handle section's parent and insert before it
-  if (!inserted && handleSection && handleSection.parentNode) {
-    try {
-      // Insert before the handle section's parent (if it's not User-Name)
-      const handleParent = handleSection.parentNode;
-      if (handleParent !== containerForFlag && handleParent.parentNode) {
-        handleParent.parentNode.insertBefore(flagSpan, handleParent);
-        inserted = true;
-        console.log(`✓ Inserted flag before handle parent for ${screenName}`);
-      } else if (handleParent === containerForFlag) {
-        // Handle section is direct child, insert before it
-        containerForFlag.insertBefore(flagSpan, handleSection);
-        inserted = true;
-        console.log(`✓ Inserted flag before handle section (direct child) for ${screenName}`);
-      }
-    } catch (e) {
-      console.log('Failed to insert before handle parent:', e);
-    }
-  }
-  
-  // Strategy 3: Find display name container and insert after it, before handle section
-  if (!inserted && handleSection) {
-    try {
-      // Find the display name link (first link)
-      const displayNameLink = containerForFlag.querySelector('a[href^="/"]');
-      if (displayNameLink) {
-        // Find the div that contains the display name link
-        const displayNameContainer = displayNameLink.closest('div');
-        if (displayNameContainer && displayNameContainer.parentNode) {
-          // Check if handle section is a sibling
-          if (displayNameContainer.parentNode === handleSection.parentNode) {
-            displayNameContainer.parentNode.insertBefore(flagSpan, handleSection);
-            inserted = true;
-            console.log(`✓ Inserted flag between display name and handle (siblings) for ${screenName}`);
-          } else {
-            // Try inserting after display name container
-            displayNameContainer.parentNode.insertBefore(flagSpan, displayNameContainer.nextSibling);
-            inserted = true;
-            console.log(`✓ Inserted flag after display name container for ${screenName}`);
+    // Find the User-Name container (reuse from above if available, otherwise find it)
+    const containerForLink = userNameContainer || usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
+
+    // Strategy 1: Find link with @username text content (most reliable - this is the actual handle)
+    if (containerForLink) {
+      const containerLinks = containerForLink.querySelectorAll('a[href^="/"]');
+      for (const link of containerLinks) {
+        const text = link.textContent?.trim();
+        const href = link.getAttribute('href');
+        const match = href.match(/^\/([^\/\?]+)/);
+
+        // Prioritize links that have @username as text
+        if (match && match[1] === screenName) {
+          if (text === `@${screenName}` || text === screenName) {
+            usernameLink = link;
+            break;
           }
         }
       }
-    } catch (e) {
-      console.log('Failed to insert after display name:', e);
     }
-  }
-  
-  // Strategy 4: Insert at the end of User-Name container (fallback)
-  if (!inserted) {
-    try {
-      containerForFlag.appendChild(flagSpan);
-      inserted = true;
-      console.log(`✓ Inserted flag at end of UserName container for ${screenName}`);
-    } catch (e) {
-      console.error('Failed to append flag to User-Name container:', e);
+
+    // Strategy 2: Find any link with @username text in UserName container
+    if (!usernameLink && containerForLink) {
+      const containerLinks = containerForLink.querySelectorAll('a[href^="/"]');
+      for (const link of containerLinks) {
+        const text = link.textContent?.trim();
+        if (text === `@${screenName}`) {
+          usernameLink = link;
+          break;
+        }
+      }
     }
-  }
-  
+
+    // Strategy 3: Find link with exact matching href that has @username text anywhere in element
+    if (!usernameLink) {
+      const links = usernameElement.querySelectorAll('a[href^="/"]');
+      for (const link of links) {
+        const href = link.getAttribute('href');
+        const text = link.textContent?.trim();
+        if ((href === `/${screenName}` || href.startsWith(`/${screenName}?`)) &&
+          (text === `@${screenName}` || text === screenName)) {
+          usernameLink = link;
+          break;
+        }
+      }
+    }
+
+    // Strategy 4: Fallback to any matching href (but prefer ones not in display name area)
+    if (!usernameLink) {
+      const links = usernameElement.querySelectorAll('a[href^="/"]');
+      for (const link of links) {
+        const href = link.getAttribute('href');
+        const match = href.match(/^\/([^\/\?]+)/);
+        if (match && match[1] === screenName) {
+          // Skip if this looks like a display name link (has verification badge nearby)
+          const hasVerificationBadge = link.closest('[data-testid="User-Name"]')?.querySelector('[data-testid="icon-verified"]');
+          if (!hasVerificationBadge || link.textContent?.trim() === `@${screenName}`) {
+            usernameLink = link;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!usernameLink) {
+      console.error(`Could not find username link for ${screenName}`);
+      console.error('Available links in container:', Array.from(usernameElement.querySelectorAll('a[href^="/"]')).map(l => ({
+        href: l.getAttribute('href'),
+        text: l.textContent?.trim()
+      })));
+      // Remove shimmer on error
+      if (shimmerInserted && shimmerSpan.parentNode) {
+        shimmerSpan.remove();
+      }
+      usernameElement.dataset.flagAdded = 'failed';
+      return;
+    }
+
+    console.log(`Found username link for ${screenName}:`, usernameLink.href, usernameLink.textContent?.trim());
+
+    // Check if flag already exists (check in the entire container, not just parent)
+    const existingFlag = usernameElement.querySelector('[data-twitter-flag]');
+    if (existingFlag) {
+      // Remove shimmer if flag already exists
+      if (shimmerInserted && shimmerSpan.parentNode) {
+        shimmerSpan.remove();
+      }
+      usernameElement.dataset.flagAdded = 'true';
+      return;
+    }
+
+    // Add flag emoji - place it next to verification badge, before @ handle
+    const flagSpan = document.createElement('span');
+    flagSpan.textContent = ` ${flag}`;
+    flagSpan.setAttribute('data-twitter-flag', 'true');
+    flagSpan.style.marginLeft = '4px';
+    flagSpan.style.marginRight = '4px';
+    flagSpan.style.display = 'inline';
+    flagSpan.style.color = 'inherit';
+    flagSpan.style.verticalAlign = 'middle';
+    flagSpan.style.fontFamily = '"Twemoji Country Flags", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif';
+
+    // Use userNameContainer found above, or find it if not found
+    const containerForFlag = userNameContainer || usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
+
+    if (!containerForFlag) {
+      console.error(`Could not find UserName container for ${screenName}`);
+      // Remove shimmer on error
+      if (shimmerInserted && shimmerSpan.parentNode) {
+        shimmerSpan.remove();
+      }
+      usernameElement.dataset.flagAdded = 'failed';
+      return;
+    }
+
+    // Find the verification badge (SVG with data-testid="icon-verified")
+    const verificationBadge = containerForFlag.querySelector('[data-testid="icon-verified"]');
+
+    // Find the handle section - the div that contains the @username link
+    // The structure is: User-Name > div (display name) > div (handle section with @username)
+    const handleSection = findHandleSection(containerForFlag, screenName);
+
+    let inserted = false;
+
+    // Strategy 1: Insert right before the handle section div (which contains @username)
+    // The handle section is a direct child of User-Name container
+    if (handleSection && handleSection.parentNode === containerForFlag) {
+      try {
+        containerForFlag.insertBefore(flagSpan, handleSection);
+        inserted = true;
+        console.log(`✓ Inserted flag before handle section for ${screenName}`);
+      } catch (e) {
+        console.log('Failed to insert before handle section:', e);
+      }
+    }
+
+    // Strategy 2: Find the handle section's parent and insert before it
+    if (!inserted && handleSection && handleSection.parentNode) {
+      try {
+        // Insert before the handle section's parent (if it's not User-Name)
+        const handleParent = handleSection.parentNode;
+        if (handleParent !== containerForFlag && handleParent.parentNode) {
+          handleParent.parentNode.insertBefore(flagSpan, handleParent);
+          inserted = true;
+          console.log(`✓ Inserted flag before handle parent for ${screenName}`);
+        } else if (handleParent === containerForFlag) {
+          // Handle section is direct child, insert before it
+          containerForFlag.insertBefore(flagSpan, handleSection);
+          inserted = true;
+          console.log(`✓ Inserted flag before handle section (direct child) for ${screenName}`);
+        }
+      } catch (e) {
+        console.log('Failed to insert before handle parent:', e);
+      }
+    }
+
+    // Strategy 3: Find display name container and insert after it, before handle section
+    if (!inserted && handleSection) {
+      try {
+        // Find the display name link (first link)
+        const displayNameLink = containerForFlag.querySelector('a[href^="/"]');
+        if (displayNameLink) {
+          // Find the div that contains the display name link
+          const displayNameContainer = displayNameLink.closest('div');
+          if (displayNameContainer && displayNameContainer.parentNode) {
+            // Check if handle section is a sibling
+            if (displayNameContainer.parentNode === handleSection.parentNode) {
+              displayNameContainer.parentNode.insertBefore(flagSpan, handleSection);
+              inserted = true;
+              console.log(`✓ Inserted flag between display name and handle (siblings) for ${screenName}`);
+            } else {
+              // Try inserting after display name container
+              displayNameContainer.parentNode.insertBefore(flagSpan, displayNameContainer.nextSibling);
+              inserted = true;
+              console.log(`✓ Inserted flag after display name container for ${screenName}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.log('Failed to insert after display name:', e);
+      }
+    }
+
+    // Strategy 4: Insert at the end of User-Name container (fallback)
+    if (!inserted) {
+      try {
+        containerForFlag.appendChild(flagSpan);
+        inserted = true;
+        console.log(`✓ Inserted flag at end of UserName container for ${screenName}`);
+      } catch (e) {
+        console.error('Failed to append flag to User-Name container:', e);
+      }
+    }
+
     if (inserted) {
       // Mark as processed
       usernameElement.dataset.flagAdded = 'true';
       console.log(`✓ Successfully added flag ${flag} for ${screenName} (${location})`);
-      
+
       // Also mark any other containers waiting for this username
       const waitingContainers = document.querySelectorAll(`[data-flag-added="waiting"]`);
       waitingContainers.forEach(container => {
         const waitingUsername = extractUsername(container);
         if (waitingUsername === screenName) {
           // Try to add flag to this container too
-          addFlagToUsername(container, screenName).catch(() => {});
+          addFlagToUsername(container, screenName).catch(() => { });
         }
       });
     } else {
@@ -759,18 +1120,30 @@ async function addFlagToUsername(usernameElement, screenName) {
 function removeAllFlags() {
   const flags = document.querySelectorAll('[data-twitter-flag]');
   flags.forEach(flag => flag.remove());
-  
+
   // Also remove any loading shimmers
   const shimmers = document.querySelectorAll('[data-twitter-flag-shimmer]');
   shimmers.forEach(shimmer => shimmer.remove());
-  
+
+  // Restore completely hidden tweets
+  const completelyHiddenTweets = document.querySelectorAll('[data-completely-hidden]');
+  completelyHiddenTweets.forEach(tweetContainer => {
+    tweetContainer.style.display = '';
+    tweetContainer.removeAttribute('data-completely-hidden');
+    tweetContainer.removeAttribute('data-hidden-country');
+  });
+
+  // Clear hidden tweets tracking and remove badge
+  hiddenTweets = [];
+  removeBadge();
+
   // Reset flag added markers
   const containers = document.querySelectorAll('[data-flag-added]');
   containers.forEach(container => {
     delete container.dataset.flagAdded;
   });
-  
-  console.log('Removed all flags');
+
+  console.log('Removed all flags, restored hidden tweets, and cleared badge');
 }
 
 // Function to process all username elements on the page
@@ -779,16 +1152,16 @@ async function processUsernames() {
   if (!extensionEnabled) {
     return;
   }
-  
+
   // Find all tweet/article containers and user cells
   const containers = document.querySelectorAll('article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="User-Names"], [data-testid="User-Name"]');
-  
+
   console.log(`Processing ${containers.length} containers for usernames`);
-  
+
   let foundCount = 0;
   let processedCount = 0;
   let skippedCount = 0;
-  
+
   for (const container of containers) {
     const screenName = extractUsername(container);
     if (screenName) {
@@ -812,7 +1185,7 @@ async function processUsernames() {
       }
     }
   }
-  
+
   if (foundCount > 0) {
     console.log(`Found ${foundCount} usernames, processing ${processedCount} new ones, skipped ${skippedCount} already processed`);
   } else {
@@ -831,7 +1204,7 @@ function initObserver() {
     if (!extensionEnabled) {
       return;
     }
-    
+
     let shouldProcess = false;
     for (const mutation of mutations) {
       if (mutation.addedNodes.length > 0) {
@@ -839,7 +1212,7 @@ function initObserver() {
         break;
       }
     }
-    
+
     if (shouldProcess) {
       // Debounce processing
       setTimeout(processUsernames, 500);
@@ -855,30 +1228,35 @@ function initObserver() {
 // Main initialization
 async function init() {
   console.log('Twitter Location Flag extension initialized');
-  
+
+  // Initialize flag emoji polyfill for Windows browsers
+  if (typeof polyfillCountryFlagEmojis === 'function') {
+    polyfillCountryFlagEmojis();
+  }
+
   // Load enabled state first
   await loadEnabledState();
-  
+
   // Load persistent cache
   await loadCache();
-  
+
   // Only proceed if extension is enabled
   if (!extensionEnabled) {
     console.log('Extension is disabled');
     return;
   }
-  
+
   // Inject page script
   injectPageScript();
-  
+
   // Wait a bit for page to fully load
   setTimeout(() => {
     processUsernames();
   }, 2000);
-  
+
   // Set up observer for new content
   initObserver();
-  
+
   // Re-process on navigation (Twitter uses SPA)
   let lastUrl = location.href;
   new MutationObserver(() => {
@@ -889,7 +1267,7 @@ async function init() {
       setTimeout(processUsernames, 2000);
     }
   }).observe(document, { subtree: true, childList: true });
-  
+
   // Save cache periodically
   setInterval(saveCache, 30000); // Save every 30 seconds
 }

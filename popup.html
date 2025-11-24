@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <style>
     body {
-      width: 250px;
+      width: 300px;
       padding: 16px;
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -74,24 +74,204 @@
       padding-top: 12px;
       border-top: 1px solid #eff3f4;
     }
+    .country-section {
+      margin: 16px 32px 0 0;
+    }
+    .section-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #0f1419;
+      margin-bottom: 8px;
+    }
+    .country-dropdown {
+      position: relative;
+      margin-bottom: 8px;
+    }
+    .dropdown-trigger {
+      width: 100%;
+      padding: 8px 12px;
+      background: #f7f9f9;
+      border: 1px solid #e1e8ed;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.2s;
+    }
+    .dropdown-trigger:hover {
+      background: #eff3f4;
+    }
+    .dropdown-arrow {
+      transition: transform 0.2s;
+    }
+    .dropdown-arrow.open {
+      transform: rotate(180deg);
+    }
+    .dropdown-content {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: white;
+      border: 1px solid #e1e8ed;
+      border-radius: 8px;
+      max-height: 250px;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      overflow: hidden;
+    }
+    .dropdown-content.open {
+      display: block;
+    }
+    .search-container {
+      padding: 8px;
+      border-bottom: 1px solid #eff3f4;
+      background: #fafafa;
+    }
+    .search-input {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid #e1e8ed;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+      box-sizing: border-box;
+    }
+    .search-input:focus {
+      border-color: #1d9bf0;
+      box-shadow: 0 0 0 2px rgba(29, 155, 240, 0.1);
+    }
+    .countries-list {
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .country-option {
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.2s;
+    }
+    .country-option:hover {
+      background: #f7f9f9;
+    }
+    .country-checkbox {
+      margin-right: 8px;
+    }
+    .country-flag {
+      font-size: 16px;
+      font-family: 'Twemoji Country Flags', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
+    }
+    .selected-countries {
+      margin-top: 8px;
+      min-height: 20px;
+    }
+    .selected-countries.empty {
+      font-size: 12px;
+      color: #536471;
+    }
+    .country-chip {
+      display: inline-flex;
+      align-items: center;
+      background: #eff3f4;
+      border: 1px solid #e1e8ed;
+      border-radius: 16px;
+      margin: 2px 4px 2px 0;
+      padding: 4px 2px 4px 8px;
+      font-size: 12px;
+      transition: all 0.2s ease;
+      max-width: 200px;
+    }
+    .country-chip:hover {
+      background: #e1e8ed;
+      border-color: #ccd6dd;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    .chip-content {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1;
+      min-width: 0;
+    }
+    .chip-flag {
+      font-size: 14px;
+      font-family: 'Twemoji Country Flags', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
+      flex-shrink: 0;
+    }
+    .chip-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #0f1419;
+    }
+    .chip-remove {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      margin-left: 4px;
+      background: transparent;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: bold;
+      color: #536471;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+    .chip-remove:hover {
+      background: #ff6b6b;
+      color: white;
+      transform: scale(1.1);
+    }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>Twitter Location Flag</h1>
+    <h1>Twitter Country Block and Flag</h1>
   </div>
-  
+
   <div class="toggle-container">
     <span class="toggle-label">Enable Extension</span>
     <div class="toggle-switch" id="toggleSwitch"></div>
   </div>
-  
+
   <div class="status" id="status">Loading...</div>
-  
-  <div class="info">
-    Shows country flags next to Twitter usernames based on account location.
+
+  <div class="country-section">
+    <div class="section-label">Hidden Countries</div>
+    <div class="country-dropdown">
+      <div class="dropdown-trigger" id="countryDropdownTrigger">
+        <span id="dropdownText">Select countries to hide...</span>
+        <span class="dropdown-arrow" id="dropdownArrow">▼</span>
+      </div>
+      <div class="dropdown-content" id="dropdownContent">
+        <div class="search-container">
+          <input type="text" id="countrySearch" class="search-input" placeholder="Search countries...">
+        </div>
+        <div class="countries-list" id="countriesList">
+          <!-- Countries will be populated by JS -->
+        </div>
+      </div>
+    </div>
+    <div class="selected-countries" id="selectedCountries">
+      No countries selected
+    </div>
   </div>
 
+  <div class="info">
+    Blocks tweets from the selected countries and displays country flags next to Twitter usernames based on account location.
+  </div>
+
+  <script src="countryFlags.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
