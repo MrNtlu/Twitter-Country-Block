@@ -1,8 +1,6 @@
 # X/Twitter Country Block and Flag Chrome Extension
 
-## Credits to <https://github.com/RhysSullivan/twitter-account-location-in-username>
-
-This has been cloned and built on top of <https://github.com/RhysSullivan/twitter-account-location-in-username>
+This has been cloned and built on top of [RhysSullivan-Twitter Account Location in Username](https://github.com/RhysSullivan/twitter-account-location-in-username)
 
 X/Twitter Country Block and Flag Chrome Extension
 
@@ -31,6 +29,8 @@ A Chrome extension that hides the selected countries and displays country flag e
 1. Click the extension icon.
 2. Select the countries you want to filter out.
 3. Refresh or open the X/Twitter and that's it!
+
+<img width="230" height="240" alt="extension" src="https://github.com/user-attachments/assets/5e77eb76-b8c0-4db5-87ed-39d4f1f9e006" />
 
 ## How It Works
 
