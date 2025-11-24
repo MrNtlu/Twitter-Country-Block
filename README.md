@@ -6,15 +6,6 @@ X/Twitter Country Block and Flag Chrome Extension
 
 A Chrome extension that hides the selected countries and displays country flag emojis next to Twitter/X usernames based on the account's location information.
 
-## Features
-
-- Automatically detects usernames on Twitter/X pages
-- Automatically hides tweets from the accounts of selected countries.
-- Queries Twitter's GraphQL API to get account location information
-- Displays the corresponding country flag emoji next to usernames
-- Works with dynamically loaded content (infinite scroll)
-- Caches location data to minimize API calls
-
 ## Installation
 
 1. Clone or download this repository
@@ -39,6 +30,15 @@ A Chrome extension that hides the selected countries and displays country flag e
 3. For each username, it queries Twitter's GraphQL API endpoint (`AboutAccountQuery`) to get the account's location
 4. The location is mapped to a flag emoji using the country flags mapping
 5. The flag emoji is displayed next to the username
+
+## Features
+
+- Automatically detects usernames on Twitter/X pages
+- Automatically hides tweets from the accounts of selected countries.
+- Queries Twitter's GraphQL API to get account location information
+- Displays the corresponding country flag emoji next to usernames
+- Works with dynamically loaded content (infinite scroll)
+- Caches location data to minimize API calls
 
 ## Limitations
 
